@@ -369,22 +369,22 @@ impl Vm {
             self.sound_timer -= 1;
         }
     }
+}
 
-    fn render(&self) {
-        println!("\x1b[2J\x1b[1;1H");
-        for row in 0..32 {
-            for col in 0..64 {
-                print!(
-                    "{}",
-                    if self.video[row][col] != 0 {
-                        "\x1b[31;42m \x1b[0m"
-                    } else {
-                        " "
-                    }
-                );
-            }
-            println!("");
+fn render(video: [[u8; 64]; 32]) {
+    println!("\x1b[2J\x1b[1;1H");
+    for row in 0..32 {
+        for col in 0..64 {
+            print!(
+                "{}",
+                if video[row][col] != 0 {
+                    "\x1b[31;42m \x1b[0m"
+                } else {
+                    " "
+                }
+            );
         }
+        println!("");
     }
 }
 
@@ -409,6 +409,8 @@ fn main() {
     // ));
 
     let mut clock = 0;
+    let mut last = vm.video.clone();
+
     vm.load(program);
     loop {
         vm.step();
@@ -416,7 +418,13 @@ fn main() {
         std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 600));
         if clock % 10 == 0 {
             vm.tick();
-            vm.render();
+            for i in 0..32 {
+                for j in 0..64 {
+                    last[i][j] |= vm.video[i][j];
+                }
+            }
+            render(last);
+            last = vm.video.clone();
         }
     }
 }
