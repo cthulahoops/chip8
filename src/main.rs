@@ -52,7 +52,21 @@ fn last_12(a: u8, b: u8) -> usize {
 }
 
 #[derive(Debug)]
-enum Instruction {
+pub enum Operator {
+    Assign = 0x0,
+    Or = 0x1,
+    And = 0x2,
+    Xor = 0x3,
+    Add = 0x4,
+    Sub = 0x5,
+    RightShift = 0x6,
+    NegSub = 0x7,
+    LeftShift = 0xe,
+}
+
+#[derive(Debug)]
+pub enum Instruction {
+    Panic,
     ClearDisplay,
     Return,
     Jump(usize),
@@ -77,27 +91,15 @@ enum Instruction {
     AddI(usize),
     LoadSprite(usize),
     StoreBCD(usize),
-    RegDump(usize),
-    RegLoad(usize),
-}
-
-#[derive(Debug)]
-enum Operator {
-    Assign,
-    Or,
-    And,
-    Xor,
-    Add,
-    Sub,
-    RightShift,
-    NegSub,
-    LeftShift,
+    DumpRegisters(usize),
+    LoadRegisters(usize),
 }
 
 impl Instruction {
     fn parse(a: u8, b: u8) -> Self {
         match high_nibble(a) {
             0x0 => match b {
+                0x00 => Instruction::Panic,
                 0xe0 => Instruction::ClearDisplay,
                 0xee => Instruction::Return,
                 _ => panic!("Unimplemented."),
@@ -152,12 +154,22 @@ impl Instruction {
                     0x1e => Instruction::AddI(x),
                     0x29 => Instruction::LoadSprite(x),
                     0x33 => Instruction::StoreBCD(x),
-                    0x55 => Instruction::RegDump(x),
-                    0x65 => Instruction::RegLoad(x),
+                    0x55 => Instruction::DumpRegisters(x),
+                    0x65 => Instruction::LoadRegisters(x),
                     _ => panic!("Not implemented: F {:02x}", b),
                 }
             }
             _ => panic!("Not implemented: {:#02x} {:#02x}", a, b),
+        }
+    }
+
+    fn to_bytes(self) -> (u8, u8) {
+        match self {
+            Instruction::StoreConst(x, value) => ((0x6 << 4) | x as u8, value),
+            Instruction::Operator(x, y, operator) => {
+                ((0x8 << 4) | x as u8, ((y as u8) << 4) | operator as u8)
+            }
+            _ => panic!("Not implemented."),
         }
     }
 }
@@ -198,6 +210,12 @@ impl Vm {
         println!("Instruction: {:?}", instruction);
 
         match instruction {
+            Instruction::Panic => {
+                for x in 0x0..0x10 {
+                    println!("V{:#00x} {:#04x}", x, self.v[x]);
+                }
+                panic!("Hit empty instruction.");
+            }
             Instruction::ClearDisplay => {
                 println!("Clear!");
             }
@@ -233,7 +251,8 @@ impl Vm {
                 self.v[x] = value;
             }
             Instruction::AddConst(x, value) => {
-                self.v[x] += value;
+                let (result, _overflow) = self.v[x].overflowing_add(value);
+                self.v[x] = result;
             }
             Instruction::Operator(x, y, op) => match op {
                 Operator::Assign => self.v[x] = self.v[y],
@@ -250,13 +269,19 @@ impl Vm {
                     self.v[0xf] = if !borrow { 1 } else { 0 };
                     self.v[x] = result;
                 }
-                Operator::LeftShift => self.v[x] >>= 1,
+                Operator::LeftShift => {
+                    self.v[0xf] = self.v[x] & 0x1;
+                    self.v[x] >>= 1;
+                }
                 Operator::NegSub => {
                     let (result, borrow) = self.v[y].overflowing_sub(self.v[x]);
                     self.v[0xf] = if !borrow { 1 } else { 0 };
                     self.v[x] = result;
                 }
-                Operator::RightShift => self.v[x] <<= 1,
+                Operator::RightShift => {
+                    self.v[0xf] = if self.v[x] & 0x80 != 0 { 1 } else { 0 };
+                    self.v[x] <<= 1;
+                }
             },
             Instruction::StoreI(addr) => {
                 self.i = addr;
@@ -285,12 +310,12 @@ impl Vm {
                 self.ram[self.i + 1] = (v / 10) % 10;
                 self.ram[self.i + 2] = v % 10;
             }
-            Instruction::RegDump(x) => {
+            Instruction::DumpRegisters(x) => {
                 for i in 0..x {
                     self.ram[self.i + i] = self.v[i]
                 }
             }
-            Instruction::RegLoad(x) => {
+            Instruction::LoadRegisters(x) => {
                 for i in 0..x {
                     self.v[i] = self.ram[self.i + i]
                 }
@@ -303,10 +328,26 @@ impl Vm {
     }
 }
 
+pub fn assemble(program: Vec<Instruction>) -> Vec<u8> {
+    let mut result = vec![];
+    for ins in program {
+        let (a, b) = ins.to_bytes();
+        result.push(a);
+        result.push(b);
+    }
+    result
+}
+
 fn main() {
     let mut vm = Vm::new();
 
     let program = fs::read("pong.ch8").unwrap();
+
+    // let program = assemble(vec!(
+    //     Instruction::StoreConst(0, 0xff),
+    //     Instruction::Operator(0, 0, Operator::RightShift),
+    // ));
+
     vm.load(program);
     loop {
         vm.step();
