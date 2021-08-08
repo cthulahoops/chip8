@@ -1,10 +1,26 @@
 use rand::prelude::*;
 use std::fs;
 
-use sdl2::pixels::Color;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use std::time::Duration;
+
+const FONT : [u8; 16 * 5] = [
+      0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+      0x20, 0x60, 0x20, 0x20, 0x70, // 1
+      0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+      0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+      0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+      0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+      0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+      0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+      0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+      0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+      0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+      0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+      0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+      0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+      0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+      0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+];
 
 struct Stack {
     values: [usize; 0x10],
@@ -182,8 +198,11 @@ struct Vm {
 
 impl Vm {
     fn new() -> Self {
+        let mut ram = [0; 0x1000];
+        ram[0..16*5].copy_from_slice(&FONT);
+
         Vm {
-            ram: [0; 0x1000],
+            ram: ram,
             v: [0; 0x10],
             i: 0,
             pc: 0x200,
@@ -195,13 +214,11 @@ impl Vm {
     }
 
     fn load(&mut self, program: Vec<u8>) {
-        for i in 0..program.len() {
-            self.ram[0x200 + i] = program[i]
-        }
+        self.ram[0x200..0x200+program.len()].copy_from_slice(&program);
     }
 
-    fn current_instruction(&self) -> (u8, u8) {
-        (self.ram[self.pc], self.ram[self.pc + 1])
+    fn current_instruction(&self) -> Instruction {
+        Instruction::parse(self.ram[self.pc], self.ram[self.pc + 1])
     }
 
     fn advance(&mut self) {
@@ -209,12 +226,10 @@ impl Vm {
     }
 
     fn step(&mut self) {
-        let (a, b) = self.current_instruction();
+        let instruction = self.current_instruction();
         self.advance();
 
-        let instruction = Instruction::parse(a, b);
-
-        println!("Instruction: {:?}", instruction);
+        // println!("Instruction: {:?}", instruction);
 
         match instruction {
             Instruction::Panic => {
@@ -302,8 +317,7 @@ impl Vm {
                 let vy = self.v[y] as usize;
                 let vx = self.v[x] as usize;
 
-                println!("Draw: {}, {} ({})", vx, vy, height);
-
+                println!("\x1b[2J\x1b[1;1H");
                 for row in 0..(height as usize) {
                     let y = (vy + row) % 32;
                     for col in 0..8 {
@@ -315,7 +329,7 @@ impl Vm {
 
                 for row in 0..32 {
                     for col in 0..64 {
-                        print!("{}", if self.video[row][col] != 0 { "X" } else {" "});
+                        print!("{}", if self.video[row][col] != 0 { "\x1b[31;42m \x1b[0m" } else {" "});
                     }
                     println!("");
                 }
@@ -329,7 +343,7 @@ impl Vm {
             Instruction::SetDelay(x) => self.delay_timer = self.v[x],
             Instruction::SetSound(x) => self.sound_timer = self.v[x],
             Instruction::AddI(x) => self.i += self.v[x] as usize,
-            Instruction::LoadSprite(x) => println!("Sprite addr: {}", x),
+            Instruction::LoadSprite(x) => self.i = (self.v[x] as usize) * 5,
             Instruction::StoreBCD(x) => {
                 let v = self.v[x];
                 self.ram[self.i] = (v / 100) % 10;
@@ -366,23 +380,6 @@ pub fn assemble(program: Vec<Instruction>) -> Vec<u8> {
 
 
 fn main() {
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-
-    let window = video_subsystem.window("CHIP-8", 64 * 10, 32 * 10)
-        .position_centered()
-        .build()
-        .unwrap();
-
-
-    let mut canvas = window.into_canvas().build().unwrap();
-
-    canvas.set_draw_color(Color::RGB(0, 0, 0));
-    canvas.clear();
-    canvas.present();
-
-    let mut event_pump = sdl_context.event_pump().unwrap();
-
     let mut vm = Vm::new();
 
     let program = fs::read("pong.ch8").unwrap();
@@ -394,19 +391,7 @@ fn main() {
 
     vm.load(program);
     loop {
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => {
-                    return;
-                }
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    return;
-                }
-                _ => {}
-            }
-        }
-
         vm.step();
-        std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 600));
     }
 }
