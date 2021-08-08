@@ -34,16 +34,6 @@ impl Stack {
     }
 }
 
-struct Vm {
-    ram: [u8; 0x1000],
-    v: [u8; 0x10],
-    i: usize,
-    pc: usize,
-    stack: Stack,
-    delay_timer: u8,
-    sound_timer: u8,
-}
-
 fn high_nibble(x: u8) -> u8 {
     (x & 0xf0) >> 4
 }
@@ -179,6 +169,17 @@ impl Instruction {
     }
 }
 
+struct Vm {
+    ram: [u8; 0x1000],
+    v: [u8; 0x10],
+    i: usize,
+    pc: usize,
+    stack: Stack,
+    delay_timer: u8,
+    sound_timer: u8,
+    video: [[u8; 64]; 32],
+}
+
 impl Vm {
     fn new() -> Self {
         Vm {
@@ -189,6 +190,7 @@ impl Vm {
             stack: Stack::new(),
             delay_timer: 0,
             sound_timer: 0,
+            video: [[0; 64]; 32],
         }
     }
 
@@ -222,7 +224,7 @@ impl Vm {
                 panic!("Hit empty instruction.");
             }
             Instruction::ClearDisplay => {
-                println!("Clear!");
+                self.video = [[0; 64]; 32];
             }
             Instruction::Return => {
                 self.pc = self.stack.pop().unwrap();
@@ -297,7 +299,26 @@ impl Vm {
                 self.v[x] = r & value
             }
             Instruction::Draw(x, y, height) => {
-                println!("Draw: {}, {} ({})", self.v[x], self.v[y], height);
+                let vy = self.v[y] as usize;
+                let vx = self.v[x] as usize;
+
+                println!("Draw: {}, {} ({})", vx, vy, height);
+
+                for row in 0..(height as usize) {
+                    let y = (vy + row) % 32;
+                    for col in 0..8 {
+                        let x = (vx + col) % 64;
+                        let set = if self.ram[self.i + row] & (0x80 >> col) != 0 { 1 } else { 0 };
+                        self.video[y][x] ^= set;
+                    }
+                }
+
+                for row in 0..32 {
+                    for col in 0..64 {
+                        print!("{}", if self.video[row][col] != 0 { "X" } else {" "});
+                    }
+                    println!("");
+                }
             }
             Instruction::SkipIfPressed(_x) => {}
             Instruction::SkipIfNotPressed(_x) => self.advance(),
