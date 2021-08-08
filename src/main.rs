@@ -3,23 +3,23 @@ use std::fs;
 
 use std::time::Duration;
 
-const FONT : [u8; 16 * 5] = [
-      0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-      0x20, 0x60, 0x20, 0x20, 0x70, // 1
-      0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-      0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-      0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-      0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-      0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-      0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-      0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-      0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-      0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-      0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-      0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-      0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-      0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-      0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+const FONT: [u8; 16 * 5] = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
 struct Stack {
@@ -199,7 +199,7 @@ struct Vm {
 impl Vm {
     fn new() -> Self {
         let mut ram = [0; 0x1000];
-        ram[0..16*5].copy_from_slice(&FONT);
+        ram[0..16 * 5].copy_from_slice(&FONT);
 
         Vm {
             ram: ram,
@@ -214,7 +214,7 @@ impl Vm {
     }
 
     fn load(&mut self, program: Vec<u8>) {
-        self.ram[0x200..0x200+program.len()].copy_from_slice(&program);
+        self.ram[0x200..0x200 + program.len()].copy_from_slice(&program);
     }
 
     fn current_instruction(&self) -> Instruction {
@@ -317,23 +317,20 @@ impl Vm {
                 let vy = self.v[y] as usize;
                 let vx = self.v[x] as usize;
 
-                println!("\x1b[2J\x1b[1;1H");
                 for row in 0..(height as usize) {
                     let y = (vy + row) % 32;
                     for col in 0..8 {
                         let x = (vx + col) % 64;
-                        let set = if self.ram[self.i + row] & (0x80 >> col) != 0 { 1 } else { 0 };
+                        let set = if self.ram[self.i + row] & (0x80 >> col) != 0 {
+                            1
+                        } else {
+                            0
+                        };
                         self.video[y][x] ^= set;
                     }
                 }
-
-                for row in 0..32 {
-                    for col in 0..64 {
-                        print!("{}", if self.video[row][col] != 0 { "\x1b[31;42m \x1b[0m" } else {" "});
-                    }
-                    println!("");
-                }
             }
+
             Instruction::SkipIfPressed(_x) => {}
             Instruction::SkipIfNotPressed(_x) => self.advance(),
             Instruction::GetDelay(x) => self.v[x] = self.delay_timer,
@@ -361,9 +358,32 @@ impl Vm {
                 }
             }
         }
+    }
 
+    fn tick(&mut self) {
         if self.delay_timer > 0 {
             self.delay_timer -= 1;
+        }
+
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
+        }
+    }
+
+    fn render(&self) {
+        println!("\x1b[2J\x1b[1;1H");
+        for row in 0..32 {
+            for col in 0..64 {
+                print!(
+                    "{}",
+                    if self.video[row][col] != 0 {
+                        "\x1b[31;42m \x1b[0m"
+                    } else {
+                        " "
+                    }
+                );
+            }
+            println!("");
         }
     }
 }
@@ -378,7 +398,6 @@ pub fn assemble(program: Vec<Instruction>) -> Vec<u8> {
     result
 }
 
-
 fn main() {
     let mut vm = Vm::new();
 
@@ -389,9 +408,15 @@ fn main() {
     //     Instruction::Operator(0, 0, Operator::RightShift),
     // ));
 
+    let mut clock = 0;
     vm.load(program);
     loop {
         vm.step();
+        clock += 1;
         std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 600));
+        if clock % 10 == 0 {
+            vm.tick();
+            vm.render();
+        }
     }
 }
