@@ -3,6 +3,12 @@ use std::fs;
 
 use std::time::Duration;
 
+use termion::event::{Key, Event};
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
+use termion::color;
+use std::io::{Write, stdout};
+
 const FONT: [u8; 16 * 5] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -194,6 +200,8 @@ struct Vm {
     delay_timer: u8,
     sound_timer: u8,
     video: [[u8; 64]; 32],
+    redraw: bool,
+    key: Option<u8>,
 }
 
 impl Vm {
@@ -210,6 +218,8 @@ impl Vm {
             delay_timer: 0,
             sound_timer: 0,
             video: [[0; 64]; 32],
+            redraw: false,
+            key: None,
         }
     }
 
@@ -240,6 +250,7 @@ impl Vm {
             }
             Instruction::ClearDisplay => {
                 self.video = [[0; 64]; 32];
+                self.redraw = true;
             }
             Instruction::Return => {
                 self.pc = self.stack.pop().unwrap();
@@ -317,6 +328,8 @@ impl Vm {
                 let vy = self.v[y] as usize;
                 let vx = self.v[x] as usize;
 
+                let mut collision = 0;
+
                 for row in 0..(height as usize) {
                     let y = (vy + row) % 32;
                     for col in 0..8 {
@@ -326,16 +339,33 @@ impl Vm {
                         } else {
                             0
                         };
+                        collision |= self.video[y][x] & set;
                         self.video[y][x] ^= set;
                     }
                 }
+
+                self.v[0xf] = collision;
+                self.redraw = true;
             }
 
-            Instruction::SkipIfPressed(_x) => {}
-            Instruction::SkipIfNotPressed(_x) => self.advance(),
+            Instruction::SkipIfPressed(x) => {
+                let expected_key = self.v[x];
+                if Some(expected_key) == self.key {
+                    self.advance();
+                    self.key = None;
+                }
+            }
+            Instruction::SkipIfNotPressed(x) => {
+                let expected_key = self.v[x];
+                if Some(expected_key) != self.key {
+                    self.advance();
+                } else {
+                    self.key = None;
+                }
+            }
             Instruction::GetDelay(x) => self.v[x] = self.delay_timer,
             Instruction::GetKey(x) => {
-                println!("Get key: {}", x);
+                panic!("Get key: {}", x);
             }
             Instruction::SetDelay(x) => self.delay_timer = self.v[x],
             Instruction::SetSound(x) => self.sound_timer = self.v[x],
@@ -369,22 +399,23 @@ impl Vm {
             self.sound_timer -= 1;
         }
     }
+
+    fn set_key(&mut self, key: u8) {
+        self.key = Some(key);
+    }
 }
 
 fn render(video: [[u8; 64]; 32]) {
-    println!("\x1b[2J\x1b[1;1H");
+    println!("{}", termion::cursor::Goto(1,1));
     for row in 0..32 {
         for col in 0..64 {
-            print!(
-                "{}",
-                if video[row][col] != 0 {
-                    "\x1b[31;42m \x1b[0m"
-                } else {
-                    " "
-                }
-            );
+            if video[row][col] != 0 {
+                print!("{}O{}", color::Bg(color::Green), color::Bg(color::Reset));
+            } else {
+                print!(" ");
+            }
         }
-        println!("");
+        print!("\n\r");
     }
 }
 
@@ -398,33 +429,80 @@ pub fn assemble(program: Vec<Instruction>) -> Vec<u8> {
     result
 }
 
+fn event_loop(mut vm: Vm) {
+    let mut clock = 0;
+
+    // Get the standard input stream.
+    let stdin = termion::async_stdin();
+    let mut events = stdin.events();
+
+
+    print!("{}{}{}", termion::clear::All, termion::cursor::Goto(1,1), termion::cursor::Hide);
+    loop {
+        vm.step();
+        clock += 1;
+        std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 600));
+
+        match events.next() {
+            Some(event) => {
+                let event = event.unwrap();
+
+                match event {
+                    Event::Key ( Key::Ctrl('c') ) | Event::Key( Key::Esc ) => { return; },
+                    Event::Key ( Key::Char(c) ) => {
+                        if let Some(key) = match c {
+                           '1' => Some(0x00),
+                           '2' => Some(0x01),
+                           '3' => Some(0x02),
+                           '4' => Some(0x03),
+                           '\'' => Some(0x04),
+                           ',' => Some(0x05),
+                           '.' => Some(0x06),
+                           'p' => Some(0x07),
+                           'a' => Some(0x08),
+                           'o' => Some(0x09),
+                           'e' => Some(0x0a),
+                           'u' => Some(0x0b),
+                           ';' => Some(0x0c),
+                           'q' => Some(0x0d),
+                           'j' => Some(0x0e),
+                           'k' => Some(0x0f),
+                           _ => None
+                        } {
+                            vm.set_key(key);
+                        }
+                    }
+                    _ => print!("{:?}\n\r", event)
+                }
+                
+            }
+            None => {}
+        }
+
+        if clock % 10 == 0 {
+            vm.tick();
+
+            if vm.redraw {
+                render(vm.video);
+                vm.redraw = false
+            }
+        }
+    }
+}
+
 fn main() {
     let mut vm = Vm::new();
 
-    let program = fs::read("pong.ch8").unwrap();
+    let program = fs::read("Tetris.ch8").unwrap();
 
     // let program = assemble(vec!(
     //     Instruction::StoreConst(0, 0xff),
     //     Instruction::Operator(0, 0, Operator::RightShift),
     // ));
 
-    let mut clock = 0;
-    let mut last = vm.video.clone();
-
     vm.load(program);
-    loop {
-        vm.step();
-        clock += 1;
-        std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 600));
-        if clock % 10 == 0 {
-            vm.tick();
-            for i in 0..32 {
-                for j in 0..64 {
-                    last[i][j] |= vm.video[i][j];
-                }
-            }
-            render(last);
-            last = vm.video.clone();
-        }
-    }
+
+    let mut stdout = stdout().into_raw_mode().unwrap();
+    event_loop(vm);
+    write!(stdout, "{}", termion::cursor::Show).unwrap();
 }
