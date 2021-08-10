@@ -3,11 +3,11 @@ use std::fs;
 
 use std::time::Duration;
 
-use termion::event::{Key, Event};
+use std::io::{stdout, Write};
+use termion::color;
+use termion::event::{Event, Key};
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
-use termion::color;
-use std::io::{Write, stdout};
 
 const FONT: [u8; 16 * 5] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -68,7 +68,11 @@ fn last_12(a: u8, b: u8) -> usize {
     (low_nibble(a) as usize) << 8 | b as usize
 }
 
-#[derive(Debug)]
+fn bcd(v: u8) -> [u8; 3] {
+    [v / 100 % 10, v / 10 % 10, v % 10]
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum Operator {
     Assign = 0x0,
     Or = 0x1,
@@ -81,7 +85,7 @@ pub enum Operator {
     LeftShift = 0xe,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Instruction {
     Panic,
     ClearDisplay,
@@ -113,13 +117,13 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    fn parse(a: u8, b: u8) -> Self {
-        match high_nibble(a) {
+    fn parse(a: u8, b: u8) -> Result<Self, String> {
+        let instruction = match high_nibble(a) {
             0x0 => match b {
                 0x00 => Instruction::Panic,
                 0xe0 => Instruction::ClearDisplay,
                 0xee => Instruction::Return,
-                _ => panic!("Unimplemented."),
+                _ => return Err("Unimplemented.".to_string()),
             },
             0x1 => Instruction::Jump(last_12(a, b)),
             0x2 => Instruction::Call(last_12(a, b)),
@@ -158,7 +162,7 @@ impl Instruction {
                 match b {
                     0x9e => Instruction::SkipIfPressed(x),
                     0xa1 => Instruction::SkipIfNotPressed(x),
-                    _ => panic!("Not implemented: F {:02x}", b),
+                    _ => return Err(format!("Not implemented: F {:02x}", b)),
                 }
             }
             0xf => {
@@ -173,11 +177,12 @@ impl Instruction {
                     0x33 => Instruction::StoreBCD(x),
                     0x55 => Instruction::DumpRegisters(x),
                     0x65 => Instruction::LoadRegisters(x),
-                    _ => panic!("Not implemented: F {:02x}", b),
+                    _ => return Err(format!("Not implemented: F {:02x}", b)),
                 }
             }
-            _ => panic!("Not implemented: {:#02x} {:#02x}", a, b),
-        }
+            _ => return Err(format!("Not implemented: {:#02x} {:#02x}", a, b)),
+        };
+        Ok(instruction)
     }
 
     fn to_bytes(self) -> (u8, u8) {
@@ -228,7 +233,7 @@ impl Vm {
     }
 
     fn current_instruction(&self) -> Instruction {
-        Instruction::parse(self.ram[self.pc], self.ram[self.pc + 1])
+        Instruction::parse(self.ram[self.pc], self.ram[self.pc + 1]).unwrap()
     }
 
     fn advance(&mut self) {
@@ -372,18 +377,15 @@ impl Vm {
             Instruction::AddI(x) => self.i += self.v[x] as usize,
             Instruction::LoadSprite(x) => self.i = (self.v[x] as usize) * 5,
             Instruction::StoreBCD(x) => {
-                let v = self.v[x];
-                self.ram[self.i] = (v / 100) % 10;
-                self.ram[self.i + 1] = (v / 10) % 10;
-                self.ram[self.i + 2] = v % 10;
+                self.ram[self.i..self.i + 3].copy_from_slice(&bcd(self.v[x]));
             }
             Instruction::DumpRegisters(x) => {
-                for i in 0..x {
+                for i in 0..(x + 1) {
                     self.ram[self.i + i] = self.v[i]
                 }
             }
             Instruction::LoadRegisters(x) => {
-                for i in 0..x {
+                for i in 0..(x + 1) {
                     self.v[i] = self.ram[self.i + i]
                 }
             }
@@ -406,7 +408,7 @@ impl Vm {
 }
 
 fn render(video: [[u8; 64]; 32]) {
-    println!("{}", termion::cursor::Goto(1,1));
+    println!("{}", termion::cursor::Goto(1, 1));
     for row in 0..32 {
         for col in 0..64 {
             if video[row][col] != 0 {
@@ -436,8 +438,12 @@ fn event_loop(mut vm: Vm) {
     let stdin = termion::async_stdin();
     let mut events = stdin.events();
 
-
-    print!("{}{}{}", termion::clear::All, termion::cursor::Goto(1,1), termion::cursor::Hide);
+    print!(
+        "{}{}{}",
+        termion::clear::All,
+        termion::cursor::Goto(1, 1),
+        termion::cursor::Hide
+    );
     loop {
         vm.step();
         clock += 1;
@@ -448,33 +454,34 @@ fn event_loop(mut vm: Vm) {
                 let event = event.unwrap();
 
                 match event {
-                    Event::Key ( Key::Ctrl('c') ) | Event::Key( Key::Esc ) => { return; },
-                    Event::Key ( Key::Char(c) ) => {
+                    Event::Key(Key::Ctrl('c')) | Event::Key(Key::Esc) => {
+                        return;
+                    }
+                    Event::Key(Key::Char(c)) => {
                         if let Some(key) = match c {
-                           '1' => Some(0x00),
-                           '2' => Some(0x01),
-                           '3' => Some(0x02),
-                           '4' => Some(0x03),
-                           '\'' => Some(0x04),
-                           ',' => Some(0x05),
-                           '.' => Some(0x06),
-                           'p' => Some(0x07),
-                           'a' => Some(0x08),
-                           'o' => Some(0x09),
-                           'e' => Some(0x0a),
-                           'u' => Some(0x0b),
-                           ';' => Some(0x0c),
-                           'q' => Some(0x0d),
-                           'j' => Some(0x0e),
-                           'k' => Some(0x0f),
-                           _ => None
+                            '1' => Some(0x00),
+                            '2' => Some(0x01),
+                            '3' => Some(0x02),
+                            '4' => Some(0x03),
+                            '\'' => Some(0x04),
+                            ',' => Some(0x05),
+                            '.' => Some(0x06),
+                            'p' => Some(0x07),
+                            'a' => Some(0x08),
+                            'o' => Some(0x09),
+                            'e' => Some(0x0a),
+                            'u' => Some(0x0b),
+                            ';' => Some(0x0c),
+                            'q' => Some(0x0d),
+                            'j' => Some(0x0e),
+                            'k' => Some(0x0f),
+                            _ => None,
                         } {
                             vm.set_key(key);
                         }
                     }
-                    _ => print!("{:?}\n\r", event)
+                    _ => print!("{:?}\n\r", event),
                 }
-                
             }
             None => {}
         }
@@ -490,19 +497,110 @@ fn event_loop(mut vm: Vm) {
     }
 }
 
-fn main() {
+pub fn execute(program: Vec<u8>) {
     let mut vm = Vm::new();
-
-    let program = fs::read("Tetris.ch8").unwrap();
-
-    // let program = assemble(vec!(
-    //     Instruction::StoreConst(0, 0xff),
-    //     Instruction::Operator(0, 0, Operator::RightShift),
-    // ));
-
     vm.load(program);
 
     let mut stdout = stdout().into_raw_mode().unwrap();
     event_loop(vm);
     write!(stdout, "{}", termion::cursor::Show).unwrap();
+}
+
+fn reffed_data(instruction: &Result<Instruction, String>) -> Option<usize> {
+    match instruction {
+        Ok(Instruction::StoreI(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn reffed_label(instruction: &Result<Instruction, String>) -> Option<usize> {
+    match instruction {
+        Ok(Instruction::StoreI(value)) => Some(*value),
+        Ok(Instruction::Call(value)) => Some(*value),
+        Ok(Instruction::Jump(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn format_op(operator: Operator) -> String {
+    match operator {
+        Operator::Assign => format!(":="),
+        Operator::Or => format!("|="),
+        Operator::And => format!("&="),
+        Operator::Xor => format!("^="),
+        Operator::Add => format!("+="),
+        Operator::Sub => format!("-="),
+        Operator::RightShift => format!(">>="),
+        Operator::NegSub => format!("<-=>"),
+        Operator::LeftShift => format!("<<="),
+    }
+}
+
+fn format_ins(instruction: Instruction) -> String {
+    match instruction {
+        Instruction::StoreConst(x, value) => format!("v{:x} := {}\n", x, value),
+        Instruction::AddConst(x, value) => format!("v{:x} += {}\n", x, value),
+        Instruction::StoreI(value) => format!("i := {}\n", value),
+        Instruction::AddI(x) => format!("i += {:x}\n", x),
+        Instruction::Draw(x, y, value) => format!("draw(v{:x}, v{:x}, {})\n", x, y, value),
+        Instruction::SkipIfEqual(x, value) => format!("if v{:x} != {}:", x, value),
+        Instruction::SkipIfNotEqual(x, value) => format!("if v{:x} == {}:", x, value),
+        Instruction::SkipIfNotEqualV(x, y) => format!("if v{:x} == v{:x}:", x, y),
+        Instruction::SkipIfNotPressed(x) => format!("if key(v{:x}):", x),
+        Instruction::SkipIfPressed(x) => format!("if !key(v{:x}):", x),
+        Instruction::StoreRand(x, value) => format!("v{:x} := random({:#x})\n", x, value),
+        Instruction::Operator(x, y, op) => format!("v{:x} {} v{:x}\n", x, format_op(op), y),
+        Instruction::StoreBCD(x) => format!("store_bcd(v{:x})\n", x),
+        _ => format!("{:?}\n", instruction),
+    }
+}
+
+pub fn disassemble(program: Vec<u8>) {
+    let mut instructions = vec![];
+
+    for i in 0..program.len() {
+        if i % 2 == 1 {
+            continue;
+        }
+
+        instructions.push(Instruction::parse(program[i], program[i + 1]));
+    }
+
+    let labels: std::collections::HashSet<usize> =
+        instructions.iter().filter_map(reffed_label).collect();
+    let data: std::collections::HashSet<usize> =
+        instructions.iter().filter_map(reffed_data).collect();
+
+    let mut c: usize = 0x200;
+    let mut data_format = false;
+
+    for instruction in instructions {
+        if labels.contains(&c) {
+            println!("{}:", c);
+            if data.contains(&c) {
+                data_format = true;
+            } else {
+                data_format = false;
+            }
+        }
+
+        if data_format {
+            println!("{:08b}\n{:08b}", program[c - 0x200], program[c - 0x1ff])
+        } else {
+            match instruction {
+                Ok(instruction) => print!("   {}", format_ins(instruction)),
+                Err(s) => println!("   ERR: {}", s),
+            }
+        }
+
+        c += 2;
+    }
+}
+
+fn main() {
+    let program = fs::read("Tetris.ch8").unwrap();
+
+    execute(program);
+
+    return;
 }
